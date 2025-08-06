@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:app_settings/app_settings.dart';
 import '../services/database_service.dart';
 import '../services/theme_service.dart';
 import '../services/notification_service.dart';
@@ -74,6 +75,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _updateNotificationSettings() async {
+    // Check if notifications are enabled first
+    final notificationsEnabled = await NotificationService.instance.areNotificationsEnabled();
+
+    if (!notificationsEnabled && (_waterReminderEnabled || _goalReminderEnabled)) {
+      // Request permissions if trying to enable notifications
+      final granted = await NotificationService.instance.requestPermissions();
+
+      if (!granted) {
+        // If permission denied, show a message and disable the toggles
+        setState(() {
+          _waterReminderEnabled = false;
+          _goalReminderEnabled = false;
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Please enable notifications in your device settings'),
+              action: SnackBarAction(
+                label: 'Settings',
+                onPressed: () {
+                  // Open app notification settings
+                  AppSettings.openAppSettings(type: AppSettingsType.notification);
+                },
+              ),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+          );
+        }
+        return;
+      }
+    }
+
     await DatabaseService.instance.updateNotificationSetting('water_reminder_enabled', _waterReminderEnabled);
     await DatabaseService.instance.updateNotificationSetting('water_reminder_interval', _waterReminderInterval);
     await DatabaseService.instance.updateNotificationSetting('goal_reminder_enabled', _goalReminderEnabled);
