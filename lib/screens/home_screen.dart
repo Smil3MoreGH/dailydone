@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../models/water_entry.dart';
 import '../models/beverage_type.dart';
+import '../models/quick_add_button.dart';
 import '../services/database_service.dart';
+import '../services/notification_service.dart';
 import '../widgets/water_progress_circle.dart';
 import '../widgets/beverage_button.dart';
 import '../widgets/water_entry_tile.dart';
@@ -17,18 +19,48 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _currentIndex = 0;
   int _currentWaterAmount = 0;
   int _dailyGoal = 2000;
   List<WaterEntry> _todayEntries = [];
+  List<QuickAddButton> _quickAddButtons = [];
   BeverageType _selectedBeverage = BeverageType.water;
   int _selectedAmount = 250;
+  DateTime? _lastWaterEntry;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Check if we need to reset water reminders
+      _checkWaterReminders();
+    }
+  }
+
+  Future<void> _checkWaterReminders() async {
+    if (_lastWaterEntry != null) {
+      final timeSinceLastEntry = DateTime.now().difference(_lastWaterEntry!);
+      final settings = await DatabaseService.instance.getNotificationSettings();
+      final interval = settings['water_reminder_interval'] ?? 30;
+
+      if (timeSinceLastEntry.inMinutes >= interval) {
+        // Reschedule water reminders
+        await NotificationService.instance.scheduleWaterReminders();
+      }
+    }
   }
 
   Future<void> _loadData() async {
@@ -36,11 +68,16 @@ class _HomeScreenState extends State<HomeScreen> {
     final goal = await db.getDailyWaterGoal();
     final entries = await db.getTodayWaterEntries();
     final total = await db.getTodayTotalWater();
+    final buttons = await db.getQuickAddButtons();
 
     setState(() {
       _dailyGoal = goal;
       _todayEntries = entries;
       _currentWaterAmount = total;
+      _quickAddButtons = buttons;
+      if (entries.isNotEmpty) {
+        _lastWaterEntry = entries.first.timestamp;
+      }
     });
   }
 
@@ -52,6 +89,11 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     await DatabaseService.instance.addWaterEntry(entry);
+    _lastWaterEntry = DateTime.now();
+
+    // Reschedule water reminders
+    await NotificationService.instance.scheduleWaterReminders();
+
     _loadData();
 
     // Show success feedback
@@ -67,6 +109,14 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
     }
+  }
+
+  Future<void> _addQuickWaterEntry(QuickAddButton button) async {
+    setState(() {
+      _selectedBeverage = button.type;
+      _selectedAmount = button.amount;
+    });
+    await _addWaterEntry();
   }
 
   void _showAddWaterDialog() {
@@ -190,6 +240,272 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _showCustomizeQuickAddDialog() {
+    List<QuickAddButton> tempButtons = List.from(_quickAddButtons);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Container(
+          decoration: BoxDecoration(
+            color: Theme.of(context).scaffoldBackgroundColor,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          padding: EdgeInsets.only(
+            left: 24,
+            right: 24,
+            top: 24,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[400],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                'Customize Quick Add',
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
+              const SizedBox(height: 24),
+              ...tempButtons.asMap().entries.map((entry) {
+                final index = entry.key;
+                final button = entry.value;
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: ListTile(
+                    leading: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: button.type.color.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        button.type.icon,
+                        color: button.type.color,
+                      ),
+                    ),
+                    title: Text('${button.amount}ml ${button.type.label}'),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.edit),
+                          onPressed: () {
+                            _editQuickAddButton(index, tempButtons, setModalState);
+                          },
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete),
+                          onPressed: () {
+                            setModalState(() {
+                              tempButtons.removeAt(index);
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+              if (tempButtons.length < 4) ...[
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    _addNewQuickAddButton(tempButtons, setModalState);
+                  },
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add Button'),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 48),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () async {
+                    await DatabaseService.instance.saveQuickAddButtons(tempButtons);
+                    if (mounted) {
+                      Navigator.pop(context);
+                      _loadData();
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                  child: const Text(
+                    'Save Changes',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _editQuickAddButton(int index, List<QuickAddButton> buttons, StateSetter setModalState) {
+    final button = buttons[index];
+    BeverageType selectedType = button.type;
+    int selectedAmount = button.amount;
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Edit Quick Add Button'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<BeverageType>(
+                value: selectedType,
+                decoration: const InputDecoration(labelText: 'Beverage Type'),
+                items: BeverageType.values.map((type) {
+                  return DropdownMenuItem(
+                    value: type,
+                    child: Row(
+                      children: [
+                        Icon(type.icon, color: type.color, size: 20),
+                        const SizedBox(width: 8),
+                        Text(type.label),
+                      ],
+                    ),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  setDialogState(() {
+                    selectedType = value!;
+                  });
+                },
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Amount (ml)',
+                  suffixText: 'ml',
+                ),
+                controller: TextEditingController(text: selectedAmount.toString()),
+                onChanged: (value) {
+                  selectedAmount = int.tryParse(value) ?? selectedAmount;
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                setModalState(() {
+                  buttons[index] = QuickAddButton(
+                    id: button.id,
+                    amount: selectedAmount,
+                    type: selectedType,
+                    position: index,
+                  );
+                });
+                Navigator.pop(context);
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _addNewQuickAddButton(List<QuickAddButton> buttons, StateSetter setModalState) {
+    BeverageType selectedType = BeverageType.water;
+    int selectedAmount = 250;
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Add Quick Add Button'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<BeverageType>(
+                value: selectedType,
+                decoration: const InputDecoration(labelText: 'Beverage Type'),
+                items: BeverageType.values.map((type) {
+                  return DropdownMenuItem(
+                    value: type,
+                    child: Row(
+                      children: [
+                        Icon(type.icon, color: type.color, size: 20),
+                        const SizedBox(width: 8),
+                        Text(type.label),
+                      ],
+                    ),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  setDialogState(() {
+                    selectedType = value!;
+                  });
+                },
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Amount (ml)',
+                  suffixText: 'ml',
+                ),
+                controller: TextEditingController(text: selectedAmount.toString()),
+                onChanged: (value) {
+                  selectedAmount = int.tryParse(value) ?? selectedAmount;
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                setModalState(() {
+                  buttons.add(QuickAddButton(
+                    amount: selectedAmount,
+                    type: selectedType,
+                    position: buttons.length,
+                  ));
+                });
+                Navigator.pop(context);
+              },
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildBody() {
     switch (_currentIndex) {
       case 0:
@@ -248,30 +564,49 @@ class _HomeScreenState extends State<HomeScreen> {
                     crossAxisSpacing: 16,
                     mainAxisSpacing: 16,
                     children: [
-                      BeverageButton(
-                        type: BeverageType.water,
-                        amount: 250,
-                        onTap: () {
-                          setState(() {
-                            _selectedBeverage = BeverageType.water;
-                            _selectedAmount = 250;
-                          });
-                          _addWaterEntry();
-                        },
-                      ),
-                      BeverageButton(
-                        type: BeverageType.water,
-                        amount: 500,
-                        onTap: () {
-                          setState(() {
-                            _selectedBeverage = BeverageType.water;
-                            _selectedAmount = 500;
-                          });
-                          _addWaterEntry();
-                        },
-                      ),
+                      ..._quickAddButtons.map((button) => BeverageButton(
+                        type: button.type,
+                        amount: button.amount,
+                        onTap: () => _addQuickWaterEntry(button),
+                      )),
+                      if (_quickAddButtons.length < 4)
+                        GestureDetector(
+                          onTap: _showCustomizeQuickAddDialog,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(
+                                color: Theme.of(context).dividerColor,
+                                width: 2,
+                                style: BorderStyle.solid,
+                              ),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.add_circle_outline,
+                                  size: 48,
+                                  color: Theme.of(context).primaryColor,
+                                ),
+                                const SizedBox(height: 8),
+                                const Text('Customize'),
+                              ],
+                            ),
+                          ),
+                        ),
                     ],
                   ),
+                  if (_quickAddButtons.length >= 4) ...[
+                    const SizedBox(height: 16),
+                    Center(
+                      child: TextButton.icon(
+                        onPressed: _showCustomizeQuickAddDialog,
+                        icon: const Icon(Icons.edit),
+                        label: const Text('Customize Quick Add'),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 32),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,

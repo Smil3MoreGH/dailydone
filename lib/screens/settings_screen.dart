@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/database_service.dart';
 import '../services/theme_service.dart';
+import '../services/notification_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   final VoidCallback? onGoalChanged;
@@ -15,6 +16,12 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   int _dailyGoal = 2000;
   final _goalController = TextEditingController();
+
+  // Notification settings
+  bool _waterReminderEnabled = true;
+  int _waterReminderInterval = 30;
+  bool _goalReminderEnabled = true;
+  int _goalReminderCount = 5;
 
   @override
   void initState() {
@@ -30,9 +37,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadSettings() async {
     final goal = await DatabaseService.instance.getDailyWaterGoal();
+    final notificationSettings = await DatabaseService.instance.getNotificationSettings();
+
     setState(() {
       _dailyGoal = goal;
       _goalController.text = (goal / 1000).toStringAsFixed(1);
+      _waterReminderEnabled = notificationSettings['water_reminder_enabled'] ?? true;
+      _waterReminderInterval = notificationSettings['water_reminder_interval'] ?? 30;
+      _goalReminderEnabled = notificationSettings['goal_reminder_enabled'] ?? true;
+      _goalReminderCount = notificationSettings['goal_reminder_count'] ?? 5;
     });
   }
 
@@ -51,6 +64,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Daily goal updated to ${goalInLiters}L'),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _updateNotificationSettings() async {
+    await DatabaseService.instance.updateNotificationSetting('water_reminder_enabled', _waterReminderEnabled);
+    await DatabaseService.instance.updateNotificationSetting('water_reminder_interval', _waterReminderInterval);
+    await DatabaseService.instance.updateNotificationSetting('goal_reminder_enabled', _goalReminderEnabled);
+    await DatabaseService.instance.updateNotificationSetting('goal_reminder_count', _goalReminderCount);
+
+    // Update notification schedules
+    await NotificationService.instance.updateAllNotifications();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Notification settings updated'),
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(10),
@@ -160,6 +195,130 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     'Current: ${(_dailyGoal / 1000).toStringAsFixed(1)}L',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.notifications,
+                        color: Theme.of(context).primaryColor,
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        'Notifications',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  SwitchListTile(
+                    title: const Text('Water Reminders'),
+                    subtitle: const Text('Get reminded to drink water'),
+                    value: _waterReminderEnabled,
+                    onChanged: (value) {
+                      setState(() {
+                        _waterReminderEnabled = value;
+                      });
+                      _updateNotificationSettings();
+                    },
+                  ),
+                  if (_waterReminderEnabled) ...[
+                    const SizedBox(height: 12),
+                    ListTile(
+                      title: const Text('Reminder Interval'),
+                      subtitle: Text('Every $_waterReminderInterval minutes'),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            onPressed: _waterReminderInterval > 15
+                                ? () {
+                              setState(() {
+                                _waterReminderInterval -= 15;
+                              });
+                              _updateNotificationSettings();
+                            }
+                                : null,
+                            icon: const Icon(Icons.remove_circle_outline),
+                          ),
+                          Text(
+                            '$_waterReminderInterval',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          IconButton(
+                            onPressed: _waterReminderInterval < 120
+                                ? () {
+                              setState(() {
+                                _waterReminderInterval += 15;
+                              });
+                              _updateNotificationSettings();
+                            }
+                                : null,
+                            icon: const Icon(Icons.add_circle_outline),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const Divider(height: 24),
+                  SwitchListTile(
+                    title: const Text('Goal Reminders'),
+                    subtitle: const Text('Get reminded to complete daily goals'),
+                    value: _goalReminderEnabled,
+                    onChanged: (value) {
+                      setState(() {
+                        _goalReminderEnabled = value;
+                      });
+                      _updateNotificationSettings();
+                    },
+                  ),
+                  if (_goalReminderEnabled) ...[
+                    const SizedBox(height: 12),
+                    ListTile(
+                      title: const Text('Daily Reminders'),
+                      subtitle: Text('$_goalReminderCount times per day'),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            onPressed: _goalReminderCount > 1
+                                ? () {
+                              setState(() {
+                                _goalReminderCount--;
+                              });
+                              _updateNotificationSettings();
+                            }
+                                : null,
+                            icon: const Icon(Icons.remove_circle_outline),
+                          ),
+                          Text(
+                            '$_goalReminderCount',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          IconButton(
+                            onPressed: _goalReminderCount < 10
+                                ? () {
+                              setState(() {
+                                _goalReminderCount++;
+                              });
+                              _updateNotificationSettings();
+                            }
+                                : null,
+                            icon: const Icon(Icons.add_circle_outline),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

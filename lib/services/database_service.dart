@@ -4,6 +4,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import '../models/water_entry.dart';
 import '../models/daily_goal.dart';
+import '../models/quick_add_button.dart';
 
 class DatabaseService {
   static final DatabaseService instance = DatabaseService._init();
@@ -61,10 +62,49 @@ class DatabaseService {
       )
     ''');
 
+    await db.execute('''
+      CREATE TABLE quick_add_buttons(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        amount INTEGER NOT NULL,
+        type INTEGER NOT NULL,
+        position INTEGER NOT NULL
+      )
+    ''');
+
     // Insert default water goal
     await db.insert('settings', {
       'key': 'daily_water_goal',
       'value': '2000', // 2 liters in milliliters
+    });
+
+    // Insert default notification settings
+    await db.insert('settings', {
+      'key': 'water_reminder_enabled',
+      'value': 'true',
+    });
+    await db.insert('settings', {
+      'key': 'water_reminder_interval',
+      'value': '30', // minutes
+    });
+    await db.insert('settings', {
+      'key': 'goal_reminder_enabled',
+      'value': 'true',
+    });
+    await db.insert('settings', {
+      'key': 'goal_reminder_count',
+      'value': '5', // times per day
+    });
+
+    // Insert default quick add buttons
+    await db.insert('quick_add_buttons', {
+      'amount': 250,
+      'type': 0, // Water
+      'position': 0,
+    });
+    await db.insert('quick_add_buttons', {
+      'amount': 500,
+      'type': 0, // Water
+      'position': 1,
     });
   }
 
@@ -128,6 +168,38 @@ class DatabaseService {
     );
   }
 
+  // Reset goals at start of new day
+  Future<void> resetDailyGoals() async {
+    final db = await database;
+    final now = DateTime.now();
+    final startOfToday = DateTime(now.year, now.month, now.day);
+
+    // Get yesterday's goals
+    final yesterdayStart = startOfToday.subtract(const Duration(days: 1));
+    final maps = await db.query(
+      'daily_goals',
+      where: 'date >= ? AND date < ?',
+      whereArgs: [
+        yesterdayStart.millisecondsSinceEpoch,
+        startOfToday.millisecondsSinceEpoch,
+      ],
+    );
+
+    // Create new goals for today based on yesterday's goals
+    for (final map in maps) {
+      final oldGoal = DailyGoal.fromMap(map);
+      final newGoal = DailyGoal(
+        title: oldGoal.title,
+        type: oldGoal.type,
+        targetCount: oldGoal.targetCount,
+        date: startOfToday,
+        currentCount: 0,
+        isCompleted: false,
+      );
+      await db.insert('daily_goals', newGoal.toMap());
+    }
+  }
+
   // Settings
   Future<int> getDailyWaterGoal() async {
     final db = await database;
@@ -150,6 +222,75 @@ class DatabaseService {
       {'value': milliliters.toString()},
       where: 'key = ?',
       whereArgs: ['daily_water_goal'],
+    );
+  }
+
+  // Quick Add Buttons
+  Future<List<QuickAddButton>> getQuickAddButtons() async {
+    final db = await database;
+    final maps = await db.query(
+      'quick_add_buttons',
+      orderBy: 'position ASC',
+    );
+    return maps.map((map) => QuickAddButton.fromMap(map)).toList();
+  }
+
+  Future<void> saveQuickAddButtons(List<QuickAddButton> buttons) async {
+    final db = await database;
+
+    // Delete all existing buttons
+    await db.delete('quick_add_buttons');
+
+    // Insert new buttons
+    for (int i = 0; i < buttons.length; i++) {
+      await db.insert('quick_add_buttons', {
+        'amount': buttons[i].amount,
+        'type': buttons[i].type.index,
+        'position': i,
+      });
+    }
+  }
+
+  // Notification Settings
+  Future<Map<String, dynamic>> getNotificationSettings() async {
+    final db = await database;
+    final settings = <String, dynamic>{};
+
+    final keys = [
+      'water_reminder_enabled',
+      'water_reminder_interval',
+      'goal_reminder_enabled',
+      'goal_reminder_count',
+    ];
+
+    for (final key in keys) {
+      final result = await db.query(
+        'settings',
+        where: 'key = ?',
+        whereArgs: [key],
+      );
+
+      if (result.isNotEmpty) {
+        final value = result.first['value'] as String;
+        // Convert string to appropriate type
+        if (key.contains('enabled')) {
+          settings[key] = value == 'true';
+        } else {
+          settings[key] = int.parse(value);
+        }
+      }
+    }
+
+    return settings;
+  }
+
+  Future<void> updateNotificationSetting(String key, dynamic value) async {
+    final db = await database;
+    await db.update(
+      'settings',
+      {'value': value.toString()},
+      where: 'key = ?',
+      whereArgs: [key],
     );
   }
 

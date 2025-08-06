@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/daily_goal.dart';
 import '../services/database_service.dart';
+import '../services/notification_service.dart';
 import '../widgets/goal_card.dart';
 
 class GoalsScreen extends StatefulWidget {
@@ -18,6 +19,8 @@ class _GoalsScreenState extends State<GoalsScreen> {
   void initState() {
     super.initState();
     _loadGoals();
+    // Update goal reminders when goals change
+    _updateGoalReminders();
   }
 
   @override
@@ -33,12 +36,17 @@ class _GoalsScreenState extends State<GoalsScreen> {
     });
   }
 
+  Future<void> _updateGoalReminders() async {
+    await NotificationService.instance.scheduleGoalReminders();
+  }
+
   Future<void> _toggleGoal(DailyGoal goal) async {
     if (goal.type == GoalType.checkbox) {
       goal.isCompleted = !goal.isCompleted;
     }
     await DatabaseService.instance.updateGoal(goal);
     _loadGoals();
+    _updateGoalReminders();
   }
 
   Future<void> _incrementGoal(DailyGoal goal) async {
@@ -50,6 +58,7 @@ class _GoalsScreenState extends State<GoalsScreen> {
     }
     await DatabaseService.instance.updateGoal(goal);
     _loadGoals();
+    _updateGoalReminders();
   }
 
   void _showAddGoalDialog() {
@@ -188,6 +197,7 @@ class _GoalsScreenState extends State<GoalsScreen> {
                       if (mounted) {
                         Navigator.pop(context);
                         _loadGoals();
+                        _updateGoalReminders();
                       }
                     }
                   },
